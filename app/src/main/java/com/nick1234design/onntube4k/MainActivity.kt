@@ -70,7 +70,7 @@ class MainActivity : AppCompatActivity() {
         search = EditText(this).apply {
             hint = "Search videos (YouTube connection coming next)"
             textSize = 18f
-            singleLine = true
+            setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_SEARCH
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
