@@ -17,6 +17,7 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
@@ -87,9 +88,21 @@ class PlayerActivity : AppCompatActivity() {
         player?.release()
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+            .setDefaultRequestProperties(mapOf(
+                "Referer" to "https://www.youtube.com/",
+                "Origin" to "https://www.youtube.com"
+            ))
+            .setConnectTimeoutMs(20000)
+            .setReadTimeoutMs(30000)
             .setAllowCrossProtocolRedirects(true)
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
-        return ExoPlayer.Builder(this).build().also {
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(15000, 45000, 2500, 6000)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+        return ExoPlayer.Builder(this)
+            .setLoadControl(loadControl)
+            .build().also {
             playerView.player = it
             player = it
         }
