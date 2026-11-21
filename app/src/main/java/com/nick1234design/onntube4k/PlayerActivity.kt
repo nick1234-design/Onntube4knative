@@ -14,7 +14,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 
 class PlayerActivity : AppCompatActivity() {
@@ -51,7 +55,7 @@ class PlayerActivity : AppCompatActivity() {
         super.onStart()
         val directUrl = intent.getStringExtra(EXTRA_URL)
         val videoId = intent.getStringExtra(EXTRA_VIDEO_ID)
-        if (!directUrl.isNullOrBlank()) playUrl(directUrl)
+        if (!directUrl.isNullOrBlank()) playDirectUrl(directUrl)
         else if (!videoId.isNullOrBlank()) resolveAndPlay(videoId)
     }
 
@@ -64,34 +68,80 @@ class PlayerActivity : AppCompatActivity() {
                 runOnUiThread {
                     sponsorSegments = segments
                     qualityButton.text = "QUALITY • " + stream.height + "P"
-                    playUrl(stream.url, stream.format == "DASH")
+                    playResolvedStream(stream)
                     handler.removeCallbacks(skipTask)
                     handler.post(skipTask)
                 }
             } catch (error: Exception) {
                 runOnUiThread {
                     qualityButton.text = "PLAYBACK ERROR"
-                    AlertDialog.Builder(this).setTitle("Couldn't play this video").setMessage(error.message ?: "The video stream could not be extracted.").setPositiveButton("OK", null).show()
+                    AlertDialog.Builder(this).setTitle("Couldn't play this video")
+                        .setMessage(error.message ?: "The video stream could not be extracted.")
+                        .setPositiveButton("OK", null).show()
                 }
             }
         }.start()
     }
 
-    private fun playUrl(url: String, isDash: Boolean = false) {
+    private fun createPlayer(): ExoPlayer {
         player?.release()
-        player = ExoPlayer.Builder(this).build().also {
+        val httpFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+            .setAllowCrossProtocolRedirects(true)
+        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
+        return ExoPlayer.Builder(this).build().also {
             playerView.player = it
-            val item = if (isDash) MediaItem.Builder().setUri(Uri.parse(url)).setMimeType(MimeTypes.APPLICATION_MPD).build() else MediaItem.fromUri(url)
-            it.setMediaItem(item)
-            it.prepare()
-            it.playWhenReady = true
-            it.addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) { if (playbackState == Player.STATE_ENDED) it.seekTo(0) }
-                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    qualityButton.text = "STREAM ERROR"
-                }
-            })
+            player = it
         }
+    }
+
+    private fun playResolvedStream(stream: ResolvedYoutubeStream) {
+        val exo = createPlayer()
+        val videoItem = MediaItem.fromUri(Uri.parse(stream.videoUrl))
+        val videoSource = ProgressiveMediaSource.Factory(
+            DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory()
+                .setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+                .setAllowCrossProtocolRedirects(true))
+        ).createMediaSource(videoItem)
+
+        val mediaSource = if (!stream.audioUrl.isNullOrBlank()) {
+            val audioSource = ProgressiveMediaSource.Factory(
+                DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory()
+                    .setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+                    .setAllowCrossProtocolRedirects(true))
+            ).createMediaSource(MediaItem.fromUri(Uri.parse(stream.audioUrl)))
+            MergingMediaSource(videoSource, audioSource)
+        } else {
+            videoSource
+        }
+
+        // DASH manifests are handled by Media3's manifest parser.
+        if (stream.format == "DASH") {
+            exo.setMediaItem(MediaItem.Builder().setUri(Uri.parse(stream.videoUrl)).setMimeType(MimeTypes.APPLICATION_MPD).build())
+        } else {
+            exo.setMediaSource(mediaSource)
+        }
+        exo.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) exo.seekTo(0)
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                qualityButton.text = "STREAM ERROR"
+                AlertDialog.Builder(this@PlayerActivity)
+                    .setTitle("Playback failed")
+                    .setMessage(error.message ?: error.errorCodeName)
+                    .setPositiveButton("OK", null).show()
+            }
+        })
+        exo.prepare()
+        exo.playWhenReady = true
+    }
+
+    private fun playDirectUrl(url: String) {
+        val exo = createPlayer()
+        exo.setMediaItem(MediaItem.fromUri(url))
+        exo.prepare()
+        exo.playWhenReady = true
     }
 
     private fun showQualityMenu() {
@@ -99,14 +149,19 @@ class PlayerActivity : AppCompatActivity() {
         val heights = intArrayOf(1080, 720, 480, 360)
         AlertDialog.Builder(this).setTitle("Maximum video quality")
             .setSingleChoiceItems(options, heights.indexOf(maxHeight).coerceAtLeast(0)) { dialog, which ->
-                maxHeight = heights[which]; intent.putExtra(EXTRA_MAX_HEIGHT, maxHeight)
+                maxHeight = heights[which]
+                intent.putExtra(EXTRA_MAX_HEIGHT, maxHeight)
                 intent.getStringExtra(EXTRA_VIDEO_ID)?.let { resolveAndPlay(it) }
                 dialog.dismiss()
             }.setNegativeButton("CANCEL", null).show()
     }
 
     override fun onStop() {
-        handler.removeCallbacks(skipTask); playerView.player = null; player?.release(); player = null; super.onStop()
+        handler.removeCallbacks(skipTask)
+        playerView.player = null
+        player?.release()
+        player = null
+        super.onStop()
     }
 
     companion object {
