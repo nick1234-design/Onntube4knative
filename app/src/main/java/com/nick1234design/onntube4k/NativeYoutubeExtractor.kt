@@ -40,17 +40,56 @@ object NativeYoutubeExtractor {
         val extractor = NewPipe.getService("YouTube").getStreamExtractor("https://www.youtube.com/watch?v=$videoId")
         extractor.fetchPage()
 
-        // Prefer YouTube's adaptive DASH manifest: it carries separate audio/video tracks,
-        // which is why filtering only pre-muxed combined streams caused playback failures.
-        val dashUrl = extractor.dashMpdUrl
-        if (dashUrl.isNotBlank()) return ResolvedYoutubeStream(dashUrl, maxHeight, "DASH")
+        // NewPipe exposes combined, video-only and audio-only streams separately.
+        // Prefer a combined stream when available; otherwise return a matched video/audio pair.
+        val combined = extractor.videoStreams
+            .filter { it.isUrl && !it.isVideoOnly() && it.height > 0 }
+            .filter { it.height <= maxHeight }
+            .maxByOrNull { it.height }
+            ?: extractor.videoStreams
+                .filter { it.isUrl && !it.isVideoOnly() && it.height > 0 }
+                .minByOrNull { it.height }
 
-        val candidates = extractor.videoStreams.filter { it.isUrl && !it.isVideoOnly() && it.height > 0 }
-        val selected = candidates.filter { it.height <= maxHeight }.maxByOrNull { it.height }
-            ?: candidates.minByOrNull { it.height }
-        if (selected != null) return ResolvedYoutubeStream(selected.content, selected.height, selected.getFormat()?.name ?: "video")
-        throw IllegalStateException("YouTube did not provide a DASH manifest or a directly playable combined stream for this video. Try another video; YouTube may restrict this stream.")
+        if (combined != null) {
+            return ResolvedYoutubeStream(
+                videoUrl = combined.content,
+                audioUrl = null,
+                height = combined.height,
+                format = combined.getFormat()?.name ?: "progressive"
+            )
+        }
+
+        val videoCandidates = extractor.videoOnlyStreams
+            .filter { it.isUrl && it.height > 0 }
+        val selectedVideo = videoCandidates.filter { it.height <= maxHeight }.maxByOrNull { it.height }
+            ?: videoCandidates.minByOrNull { it.height }
+        val selectedAudio = extractor.audioStreams.firstOrNull { it.isUrl }
+
+        if (selectedVideo != null && selectedAudio != null) {
+            return ResolvedYoutubeStream(
+                videoUrl = selectedVideo.content,
+                audioUrl = selectedAudio.content,
+                height = selectedVideo.height,
+                format = "separate audio/video"
+            )
+        }
+
+        val dashUrl = extractor.dashMpdUrl
+        if (dashUrl.isNotBlank()) {
+            return ResolvedYoutubeStream(dashUrl, null, maxHeight, "DASH")
+        }
+
+        throw IllegalStateException(
+            "YouTube extraction returned no usable streams. Combined: ${extractor.videoStreams.count { it.isUrl }}, " +
+                "video-only: ${extractor.videoOnlyStreams.count { it.isUrl }}, audio-only: ${extractor.audioStreams.count { it.isUrl }}. " +
+                "YouTube may be restricting this video or the extractor may need an update."
+        )
     }
 }
 
-data class ResolvedYoutubeStream(val url: String, val height: Int, val format: String)
+data class ResolvedYoutubeStream(
+    val videoUrl: String,
+    val audioUrl: String?,
+    val height: Int,
+    val format: String
+)
