@@ -19,6 +19,7 @@ class MainActivity : AppCompatActivity() {
     private val panel = Color.rgb(29, 31, 36)
     private val red = Color.rgb(255, 48, 48)
     private lateinit var search: EditText
+    private lateinit var results: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,13 +79,16 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(panel)
             setOnEditorActionListener { _, action, _ ->
                 if (action == EditorInfo.IME_ACTION_SEARCH) {
-                    showMessage("YouTube search is the next integration step.")
+                    runSearch()
                     true
                 } else false
             }
         }
         root.addView(search, LinearLayout.LayoutParams(-1, dp(58)))
         search.setOnClickListener { search.requestFocus() }
+
+        results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(10), 0, dp(4)) }
+        root.addView(results)
 
         val section = TextView(this).apply {
             text = "WELCOME TO ONNTUBE4K"
@@ -135,6 +139,33 @@ class MainActivity : AppCompatActivity() {
             minHeight = dp(52)
             minWidth = dp(130)
         }
+    }
+
+    private fun runSearch() {
+        val query = search.text.toString().trim()
+        if (query.isEmpty()) return
+        results.removeAllViews()
+        results.addView(TextView(this).apply { text = "Searching YouTube..."; setTextColor(Color.LTGRAY) })
+        Thread {
+            try {
+                val videos = YoutubeApi.search(query, BuildConfig.YOUTUBE_API_KEY)
+                runOnUiThread {
+                    results.removeAllViews()
+                    if (videos.isEmpty()) results.addView(TextView(this).apply { text = "No videos found."; setTextColor(Color.WHITE) })
+                    videos.forEach { video ->
+                        val item = Button(this).apply {
+                            text = video.title + "\n" + video.channel
+                            textSize = 14f; isAllCaps = false; gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                            setTextColor(Color.WHITE); setBackgroundColor(panel)
+                            setOnClickListener { startActivity(Intent(this@MainActivity, PlayerActivity::class.java).putExtra(PlayerActivity.EXTRA_VIDEO_ID, video.id).putExtra(PlayerActivity.EXTRA_MAX_HEIGHT, 1080)) }
+                        }
+                        results.addView(item, LinearLayout.LayoutParams(-1, dp(68)).apply { bottomMargin = dp(6) })
+                    }
+                }
+            } catch (error: Exception) {
+                runOnUiThread { results.removeAllViews(); results.addView(TextView(this).apply { text = error.message ?: "YouTube search failed."; setTextColor(Color.rgb(255, 120, 120)) }) }
+            }
+        }.start()
     }
 
     private fun openPlayer() {
