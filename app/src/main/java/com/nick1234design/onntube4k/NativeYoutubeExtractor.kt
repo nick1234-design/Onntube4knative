@@ -42,6 +42,39 @@ object NativeYoutubeExtractor {
 
         // NewPipe exposes combined, video-only and audio-only streams separately.
         // Prefer a combined stream when available; otherwise return a matched video/audio pair.
+        // Prefer separate tracks so English audio can be selected explicitly.
+        val videoCandidates = extractor.videoOnlyStreams.filter { it.isUrl && it.height > 0 }
+        val withinQuality = videoCandidates.filter { it.height <= maxHeight }
+        val qualityCandidates = if (withinQuality.isNotEmpty()) withinQuality else videoCandidates
+
+        // Prefer H.264/AVC for compatibility and lower decoding load on Android TV.
+        val selectedVideo = qualityCandidates.maxWithOrNull(
+            compareBy<org.schabi.newpipe.extractor.stream.VideoStream> {
+                val codec = it.codec ?: ""
+                if (codec.contains("avc", ignoreCase = true) ||
+                    codec.contains("h264", ignoreCase = true)) 1 else 0
+            }.thenBy { it.height }
+        )
+
+        val audioCandidates = extractor.audioStreams.filter { it.isUrl }
+        val englishAudio = audioCandidates.filter { audio ->
+            audio.audioLocale?.language.equals("en", ignoreCase = true) ||
+                (audio.audioTrackName ?: "").contains("English", ignoreCase = true) ||
+                (audio.audioTrackId ?: "").contains(".en", ignoreCase = true)
+        }
+        // If English is not offered, fall back to the extractor's default available audio.
+        val selectedAudio = (englishAudio.ifEmpty { audioCandidates })
+            .maxByOrNull { if (it.averageBitrate > 0) it.averageBitrate else 0 }
+
+        if (selectedVideo != null && selectedAudio != null) {
+            return ResolvedYoutubeStream(
+                videoUrl = selectedVideo.content,
+                audioUrl = selectedAudio.content,
+                height = selectedVideo.height,
+                format = "separate audio/video"
+            )
+        }
+
         val combined = extractor.videoStreams
             .filter { it.isUrl && !it.isVideoOnly() && it.height > 0 }
             .filter { it.height <= maxHeight }
@@ -58,12 +91,6 @@ object NativeYoutubeExtractor {
                 format = combined.getFormat()?.name ?: "progressive"
             )
         }
-
-        val videoCandidates = extractor.videoOnlyStreams
-            .filter { it.isUrl && it.height > 0 }
-        val selectedVideo = videoCandidates.filter { it.height <= maxHeight }.maxByOrNull { it.height }
-            ?: videoCandidates.minByOrNull { it.height }
-        val selectedAudio = extractor.audioStreams.firstOrNull { it.isUrl }
 
         if (selectedVideo != null && selectedAudio != null) {
             return ResolvedYoutubeStream(
